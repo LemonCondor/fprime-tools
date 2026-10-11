@@ -560,3 +560,42 @@ def test_merge_cpp_aborts_on_corrupted_marker():
     )
     with pytest.raises(merge.ImplMergeError, match="removed or corrupted"):
         merge.merge_cpp(existing, template)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        'const char* s = R"(say "hi)";',
+        'const char* s = R"x(a")x";',
+        'const char* s = u8R"(}")";',
+        "const U32 timeout = 1'000;",
+        "const U32 mask = 0xFF'FF;",
+    ],
+)
+def test_merge_cpp_handles_raw_strings_and_digit_separators(statement):
+    # Raw string literals and digit separators must not be read as unterminated
+    # string/character literals (which made the merge abort on unbalanced braces).
+    template = _annotated(CPP_TEMPLATE, with_hash=False)
+    existing = _annotated(
+        CPP_TEMPLATE.replace(
+            "void Comp ::\n  portTwo_handler(FwIndexType portNum)\n{\n  // TODO\n}\n",
+            "",
+        ).replace(
+            "portOne_handler(FwIndexType portNum)\n{\n  // TODO\n}",
+            "portOne_handler(FwIndexType portNum)\n{\n  "
+            + statement
+            + "\n  if (portNum > 0) {\n    this->hello();\n  }\n}",
+        ),
+        with_hash=False,
+    )
+    merged, _ = merge.merge_cpp(existing, template)
+    assert statement in merged
+    assert merged.count("portTwo_handler") == 1
+    assert merged.index("portTwo_handler") < merged.index("}  // namespace M")
+
+
+def test_split_functions_char_literals_still_hide_braces():
+    blocks = merge.split_functions(
+        ["void Comp ::", "  f()", "{", "  char c = u8'{';", "  char d = L'}';", "}"]
+    )
+    assert [block.name for block in blocks] == ["f"]

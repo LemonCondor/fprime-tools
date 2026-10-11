@@ -148,6 +148,43 @@ def _find_banner_starts(lines: List[str], limit: int) -> List[int]:
     return starts
 
 
+RAW_STRING_PREFIXES = ("R", "uR", "UR", "LR", "u8R")
+RAW_DELIMITER_RE = re.compile(r'[^\s()\\"]{0,16}\(')
+
+
+def _token_start(text: str, index: int) -> int:
+    """Start of the identifier/number token that ends just before ``index``."""
+    start = index
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_'."):
+        start -= 1
+    return start
+
+
+def _raw_string_close(text: str, index: int) -> Optional[str]:
+    """Closing sequence of the raw string literal whose quote is at ``index``, if any.
+
+    ``R"delim( ... )delim"`` (C++11, optionally prefixed by u8/u/U/L): its content
+    may contain quotes and braces, so it must be skipped as a whole.
+    """
+    if text[_token_start(text, index) : index] not in RAW_STRING_PREFIXES:
+        return None
+    match = RAW_DELIMITER_RE.match(text, index + 1)
+    if match is None:
+        return None
+    return ")" + match.group(0)[:-1] + '"'
+
+
+def _is_digit_separator(text: str, index: int) -> bool:
+    """Whether the ``'`` at ``index`` is a digit separator (C++14), e.g. ``1'000``."""
+    start = _token_start(text, index)
+    return (
+        start < index
+        and text[start].isdigit()
+        and index + 1 < len(text)
+        and text[index + 1].isalnum()
+    )
+
+
 def _namespace_close_lines(lines: List[str]) -> List[bool]:
     """Per line: whether its (only) closing brace pops a ``namespace X {`` brace.
 
@@ -158,6 +195,7 @@ def _namespace_close_lines(lines: List[str]) -> List[bool]:
     flags = [False] * len(lines)
     stack: List[bool] = []  # True where the open brace came from a namespace line
     state = "normal"
+    raw_close = ""
     for line_no, line in enumerate(lines):
         is_ns_open = state == "normal" and NAMESPACE_OPEN_RE.match(line) is not None
         index = 0
@@ -165,6 +203,13 @@ def _namespace_close_lines(lines: List[str]) -> List[bool]:
         while index < length:
             char = line[index]
             nxt = line[index + 1] if index + 1 < length else ""
+            if state == "raw_string":
+                end = line.find(raw_close, index)
+                if end == -1:
+                    break
+                state = "normal"
+                index = end + len(raw_close)
+                continue
             if state == "block_comment":
                 if char == "*" and nxt == "/":
                     state = "normal"
@@ -186,9 +231,11 @@ def _namespace_close_lines(lines: List[str]) -> List[bool]:
                     state = "block_comment"
                     index += 1
                 elif char == '"':
-                    state = "string"
+                    raw_close = _raw_string_close(line, index) or ""
+                    state = "raw_string" if raw_close else "string"
                 elif char == "'":
-                    state = "char"
+                    if not _is_digit_separator(line, index):
+                        state = "char"
                 elif char == "{":
                     stack.append(is_ns_open)
                 elif char == "}":
@@ -376,9 +423,15 @@ def split_functions(body_lines: List[str]) -> List[FunctionBlock]:
             elif char == "/" and nxt == "*":
                 state = "block_comment"
             elif char == '"':
+                raw_close = _raw_string_close(text, index)
+                if raw_close:
+                    end = text.find(raw_close, index + 1)
+                    index = length if end == -1 else end + len(raw_close)
+                    continue
                 state = "string"
             elif char == "'":
-                state = "char"
+                if not _is_digit_separator(text, index):
+                    state = "char"
             elif char == "{":
                 if seg_start is None:
                     seg_start = index
