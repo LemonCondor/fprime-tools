@@ -194,3 +194,15 @@ def test_settings_no_ini():
     assert "install_destination" not in results
     assert "settings_file" not in results
     assert results["environment"] == {}
+
+
+def test_settings_fprime_packages_repeated_load(tmp_path):
+    """Loading settings repeatedly does not accumulate _fprime_packages libraries."""
+    (tmp_path / "fprime" / "cmake").mkdir(parents=True)
+    (tmp_path / "fprime" / "cmake" / "FPrime.cmake").touch()
+    (tmp_path / "_fprime_packages" / "libA").mkdir(parents=True)
+    settings_file = tmp_path / "settings.ini"
+    settings_file.write_text("[fprime]\nproject_root: .\nframework_path: ./fprime\n")
+    expected = [tmp_path.resolve() / "_fprime_packages" / "libA"]
+    for _ in range(3):
+        assert IniSettings.load(settings_file)["library_locations"] == expected

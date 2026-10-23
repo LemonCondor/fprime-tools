@@ -267,8 +267,10 @@ class IniSettings:
             try:
                 packages_dir = project_root / "_fprime_packages"
                 if os.path.exists(packages_dir):
-                    if settings.get("library_locations") is None:
-                        settings["library_locations"] = []
+                    # Copy so appending does not mutate the shared FPRIME_FIELDS default
+                    settings["library_locations"] = list(
+                        settings.get("library_locations") or []
+                    )
                     for folder in os.listdir(packages_dir):
                         settings["library_locations"].append(
                             Path(packages_dir / folder)
